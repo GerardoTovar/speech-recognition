@@ -73,12 +73,27 @@ public class SpeechRecognition extends Plugin implements Constants {
             return;
         }
 
+        Logger.info(getLogTag(), "Restarting recognition due to repeated start call");
+        stopListening(); // Detiene la escucha actual
+        
+        // Agrega un retraso para liberar los recursos antes de reiniciar
+        bridge.getWebView().postDelayed(() -> {
+            releaseSpeechRecognizer(); // Libera los recursos
+            isListening.set(false); // Restablece el estado
+            // Continúa con el inicio del nuevo proceso después de liberar recursos
+            initializeAndStart(call);
+        }, 100);
+    }
+
+    private void initializeAndStart(PluginCall call) {
         String language = call.getString("language", Locale.getDefault().toString());
         int maxResults = call.getInt("maxResults", MAX_RESULTS);
         String prompt = call.getString("prompt", null);
         boolean partialResults = call.getBoolean("partialResults", false);
         boolean popup = call.getBoolean("popup", false);
         int allowForSilence = call.getInt("allowForSilence", 0);
+
+        // Inicia un nuevo proceso de reconocimiento
         beginListening(language, maxResults, prompt, partialResults, popup, call, allowForSilence);
     }
 
@@ -91,6 +106,7 @@ public class SpeechRecognition extends Plugin implements Constants {
                 speechRecognizer.destroy(); // Libera recursos asignados
                 JSObject ret = new JSObject();
                 ret.put("status", "stopped");
+                ret.put("metod", "releaseSpeechRecognizer");
                 notifyListeners(LISTENING_EVENT, ret); // Notifica que el reconocimiento fue detenido
             } catch (Exception ex) {
                 Logger.error(getLogTag(), "Error releasing SpeechRecognizer: " + ex.getMessage(), ex);
@@ -259,7 +275,8 @@ public class SpeechRecognition extends Plugin implements Constants {
         public void onBeginningOfSpeech() {
             if (isListening.get()) { // Solo notifica si el reconocimiento está activo
                 JSObject ret = new JSObject();
-                ret.put("status", "started");
+                ret.put("status", "started_speech");
+                ret.put("metod", "onBeginningOfSpeech");
                 SpeechRecognition.this.notifyListeners(LISTENING_EVENT, ret);
             } else {
                 Logger.warn(getLogTag(), "onBeginningOfSpeech called, but not in listening state");
@@ -275,11 +292,10 @@ public class SpeechRecognition extends Plugin implements Constants {
         @Override
         public void onEndOfSpeech() {
             bridge.getWebView().post(() -> {
-                if (isListening.compareAndSet(true, false)) {
-                    JSObject ret = new JSObject();
-                    ret.put("status", "stopped");
-                    notifyListeners(LISTENING_EVENT, ret);
-                }
+                JSObject ret = new JSObject();
+                ret.put("status", "stopped_speech");
+                ret.put("metod", "onEndOfSpeech");
+                notifyListeners(LISTENING_EVENT, ret);
             });
         }
 
@@ -288,6 +304,7 @@ public class SpeechRecognition extends Plugin implements Constants {
             if (isListening.compareAndSet(true, false)) { // Cambia el estado solo si estaba escuchando
                 stopListening();
             }
+            notifyListeners(LISTENING_EVENT, new JSObject().put("status", "error").put("error", getErrorText(error)));
             String errorMssg = getErrorText(error);
             if (this.call != null) {
                 call.reject(errorMssg);
