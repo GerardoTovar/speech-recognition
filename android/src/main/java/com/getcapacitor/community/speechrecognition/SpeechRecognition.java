@@ -33,6 +33,7 @@ public class SpeechRecognition extends Plugin implements Constants {
     public static final String TAG = "SpeechRecognition";
     private static final String LISTENING_EVENT = "listeningState";
     static final String SPEECH_RECOGNITION = "speechRecognition";
+    private long lastStartTime = 0;
 
     private Receiver languageReceiver;
     private SpeechRecognizer speechRecognizer;
@@ -63,6 +64,13 @@ public class SpeechRecognition extends Plugin implements Constants {
 
     @PluginMethod
     public void start(PluginCall call) {
+        long currentTime = System.currentTimeMillis();
+        if (currentTime - lastStartTime < 500) { // Límite de 500ms entre llamadas
+            call.reject("Too many requests. Please wait before starting again.");
+            return;
+        }
+        lastStartTime = currentTime;
+
         if (!isSpeechRecognitionAvailable()) {
             call.unavailable(NOT_AVAILABLE);
             return;
@@ -74,13 +82,10 @@ public class SpeechRecognition extends Plugin implements Constants {
         }
 
         Logger.info(getLogTag(), "Restarting recognition due to repeated start call");
-        stopListening(); // Detiene la escucha actual
-        
-        // Agrega un retraso para liberar los recursos antes de reiniciar
+        stopListening();
         bridge.getWebView().postDelayed(() -> {
-            releaseSpeechRecognizer(); // Libera los recursos
-            isListening.set(false); // Restablece el estado
-            // Continúa con el inicio del nuevo proceso después de liberar recursos
+            releaseSpeechRecognizer();
+            isListening.set(false);
             initializeAndStart(call);
         }, 100);
     }
@@ -101,7 +106,7 @@ public class SpeechRecognition extends Plugin implements Constants {
         // Libera recursos del SpeechRecognizer sin importar el estado actual
         if (speechRecognizer != null) {
             try {
-                Logger.info(getLogTag(), "Forcing release of SpeechRecognizer resources");
+                Logger.info(getLogTag(), "Releasing SpeechRecognizer resources");
                 speechRecognizer.cancel(); // Cancela cualquier operación en curso
                 speechRecognizer.destroy(); // Libera recursos asignados
                 JSObject ret = new JSObject();
@@ -112,9 +117,9 @@ public class SpeechRecognition extends Plugin implements Constants {
                 Logger.error(getLogTag(), "Error releasing SpeechRecognizer: " + ex.getMessage(), ex);
             } finally {
                 speechRecognizer = null;
-                isListening.set(false); // Asegúrate de restablecer el estado
             }
         }
+        isListening.set(false); // Asegúrate de restablecer el estado
     }
 
 
@@ -305,9 +310,8 @@ public class SpeechRecognition extends Plugin implements Constants {
                 stopListening();
             }
             notifyListeners(LISTENING_EVENT, new JSObject().put("status", "error").put("error", getErrorText(error)));
-            String errorMssg = getErrorText(error);
-            if (this.call != null) {
-                call.reject(errorMssg);
+            if (call != null) {
+                call.reject(getErrorText(error));
             }
         }
 
